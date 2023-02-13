@@ -51,59 +51,60 @@ class MCTformerV2(VisionTransformer):
         return torch.cat((class_pos_embed, patch_pos_embed), dim=1)
 
     def forward_features(self, x, n=12):
-        B, nc, w, h = x.shape
-        x = self.patch_embed(x)
+        B, nc, w, h = x.shape # B 3 224 224
+        x = self.patch_embed(x) # B 196 768
 
-        cls_tokens = self.cls_token.expand(B, -1, -1)
-        x = torch.cat((cls_tokens, x), dim=1)
-        x = x + self.interpolate_pos_encoding(x, w, h)
-        x = self.pos_drop(x)
+        cls_tokens = self.cls_token.expand(B, -1, -1) # B 20 768
+        x = torch.cat((cls_tokens, x), dim=1) # B (20+196) 768
+        x = x + self.interpolate_pos_encoding(x, w, h) # B (20+196) 768
+        x = self.pos_drop(x) # B (20+196) 768
         attn_weights = []
 
         for i, blk in enumerate(self.blocks):
-            x, weights_i = blk(x)
-            attn_weights.append(weights_i)
+            x, weights_i = blk(x) # x: B (20+196) 768  weights_i: B 12 (20+196) (20+196)
+            attn_weights.append(weights_i) 
 
         return x[:, 0:self.num_classes], x[:, self.num_classes:], attn_weights
 
     def forward(self, x, return_att=False, n_layers=12, attention_type='fused'):
-        w, h = x.shape[2:]
-        x_cls, x_patch, attn_weights = self.forward_features(x)
-        n, p, c = x_patch.shape
+        w, h = x.shape[2:] # 224 224
+        x_cls, x_patch, attn_weights = self.forward_features(x) #x_cls: B 20 768 x_patch: B 196 768 weights_i: [(B 12 (20+196) (20+196))*12]
+        n, p, c = x_patch.shape # x_patch: B 196 768
         if w != h:
             w0 = w // self.patch_embed.patch_size[0]
             h0 = h // self.patch_embed.patch_size[0]
             x_patch = torch.reshape(x_patch, [n, w0, h0, c])
         else:
-            x_patch = torch.reshape(x_patch, [n, int(p ** 0.5), int(p ** 0.5), c])
-        x_patch = x_patch.permute([0, 3, 1, 2])
+            x_patch = torch.reshape(x_patch, [n, int(p ** 0.5), int(p ** 0.5), c]) # x_patch: B 14 14 768
+        x_patch = x_patch.permute([0, 3, 1, 2]) # x_patch: B 768 14 14
         x_patch = x_patch.contiguous()
-        x_patch = self.head(x_patch)
-        x_patch_logits = self.avgpool(x_patch).squeeze(3).squeeze(2)
+        x_patch = self.head(x_patch) # x_patch: B 20 14 14
+        x_patch_logits = self.avgpool(x_patch).squeeze(3).squeeze(2) # x_patch_logits: B 20
 
-        attn_weights = torch.stack(attn_weights)  # 12 * B * H * N * N
-        attn_weights = torch.mean(attn_weights, dim=2)  # 12 * B * N * N
+        attn_weights = torch.stack(attn_weights)  # 12 * B * H * N * N   #12(num_of_layer used) B 12(num_of_heads) (20+196) (20+196)
+        attn_weights = torch.mean(attn_weights, dim=2)  # 12 * B * N * N   #12(num_of_layer used) B (20+196) (20+196)
 
-        feature_map = x_patch.detach().clone()  # B * C * 14 * 14
-        feature_map = F.relu(feature_map)
+        feature_map = x_patch.detach().clone()  # B * C * 14 * 14   feature_map: B 20 14 14
+        feature_map = F.relu(feature_map) # feature_map: B 20 14 14
 
-        n, c, h, w = feature_map.shape
+        n, c, h, w = feature_map.shape #  B 20 14 14
 
-        mtatt = attn_weights[-n_layers:].sum(0)[:, 0:self.num_classes, self.num_classes:].reshape([n, c, h, w])
+        mtatt = attn_weights[-n_layers:].sum(0)[:, 0:self.num_classes, self.num_classes:].reshape([n, c, h, w]) #  B 20 14 14
 
         if attention_type == 'fused':
-            cams = mtatt * feature_map  # B * C * 14 * 14
+            cams = mtatt * feature_map  # B * C * 14 * 14 #  B 20 14 14
         elif attention_type == 'patchcam':
-            cams = feature_map
+            cams = feature_map #  B 20 14 14
         else:
-            cams = mtatt
+            cams = mtatt #  B 20 14 14
 
-        patch_attn = attn_weights[:, :, self.num_classes:, self.num_classes:]
+        patch_attn = attn_weights[:, :, self.num_classes:, self.num_classes:]  #12(num_of_layer used) B 196 196
 
-        x_cls_logits = x_cls.mean(-1)
+        x_cls_logits = x_cls.mean(-1) #x_cls_logits: B 20 768
 
         if return_att:
             return x_cls_logits, cams, patch_attn
+        #          B 20           B 20 14 14    12 B 196 196
         else:
             return x_cls_logits, x_patch_logits
 
@@ -165,7 +166,7 @@ class MCTformerV1(VisionTransformer):
         return x[:, 0:self.num_classes], attn_weights
 
     def forward(self, x, n_layers=12, return_att=False):
-        x, attn_weights = self.forward_features(x) #x: B 20 768 weights_i: [(B 12 (20+196) (20+196))*12]
+        x, attn_weights = self.forward_features(x) #x: B 20 768   weights_i: [(B 12 (20+196) (20+196))*12]
 
         attn_weights = torch.stack(attn_weights)  # 12 * B * H * N * N                12(num_of_layer used) B 12(num_of_heads) (20+196) (20+196)
         attn_weights = torch.mean(attn_weights, dim=2)  # 12 * B * N * N   12(num_of_layer used) B (20+196) (20+196)
@@ -175,7 +176,8 @@ class MCTformerV1(VisionTransformer):
         x_cls_logits = x.mean(-1) # B 20 
 
         if return_att:
-            return x_cls_logits, mtatt, patch_attn
+            return x_cls_logits, mtatt, patch_attn 
+        #          B 20           B 20 196    12 B 196 196
         else:
             return x_cls_logits
 
