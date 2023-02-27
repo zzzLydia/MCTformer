@@ -77,6 +77,7 @@ class MCTformerV2(VisionTransformer):
         else:
             x_patch = torch.reshape(x_patch, [n, int(p ** 0.5), int(p ** 0.5), c]) # x_patch: B 14 14 384
         x_patch = x_patch.permute([0, 3, 1, 2]) # x_patch: B 384 14 14
+        #x_patch: use to generate cam_patch
         x_patch = x_patch.contiguous()
         x_patch = self.head(x_patch) # x_patch: B 20 14 14
         x_patch_logits = self.avgpool(x_patch).squeeze(3).squeeze(2) # x_patch_logits: B 20
@@ -86,10 +87,11 @@ class MCTformerV2(VisionTransformer):
 
         feature_map = x_patch.detach().clone()  # B * C * 14 * 14   feature_map: B 20 14 14
         feature_map = F.relu(feature_map) # feature_map: B 20 14 14
-
+        #feature_map: cam_patch
         n, c, h, w = feature_map.shape #  B 20 14 14
 
         mtatt = attn_weights[-n_layers:].sum(0)[:, 0:self.num_classes, self.num_classes:].reshape([n, c, h, w]) #  B 20 14 14
+        #mtatt: cam_cls
 
         if attention_type == 'fused':
             cams = mtatt * feature_map  # B * C * 14 * 14 #  B 20 14 14
@@ -99,6 +101,7 @@ class MCTformerV2(VisionTransformer):
             cams = mtatt #  B 20 14 14
 
         patch_attn = attn_weights[:, :, self.num_classes:, self.num_classes:]  #12(num_of_layer used) B 196 196
+        #patch_attn: affinity matrix
 
         x_cls_logits = x_cls.mean(-1) #x_cls_logits: B 20 384
 
