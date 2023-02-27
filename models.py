@@ -52,36 +52,36 @@ class MCTformerV2(VisionTransformer):
 
     def forward_features(self, x, n=12):
         B, nc, w, h = x.shape # B 3 224 224
-        x = self.patch_embed(x) # B 196 768
+        x = self.patch_embed(x) # B 196 384
 
-        cls_tokens = self.cls_token.expand(B, -1, -1) # B 20 768
-        x = torch.cat((cls_tokens, x), dim=1) # B (20+196) 768
-        x = x + self.interpolate_pos_encoding(x, w, h) # B (20+196) 768
-        x = self.pos_drop(x) # B (20+196) 768
+        cls_tokens = self.cls_token.expand(B, -1, -1) # B 20 384
+        x = torch.cat((cls_tokens, x), dim=1) # B (20+196) 384
+        x = x + self.interpolate_pos_encoding(x, w, h) # B (20+196) 384
+        x = self.pos_drop(x) # B (20+196) 384
         attn_weights = []
 
         for i, blk in enumerate(self.blocks):
-            x, weights_i = blk(x) # x: B (20+196) 768  weights_i: B 12 (20+196) (20+196)
+            x, weights_i = blk(x) # x: B (20+196) 384  weights_i: B 6 (20+196) (20+196)
             attn_weights.append(weights_i) 
 
         return x[:, 0:self.num_classes], x[:, self.num_classes:], attn_weights
 
     def forward(self, x, return_att=False, n_layers=12, attention_type='fused'):
         w, h = x.shape[2:] # 224 224
-        x_cls, x_patch, attn_weights = self.forward_features(x) #x_cls: B 20 768 x_patch: B 196 768 weights_i: [(B 12 (20+196) (20+196))*12]
-        n, p, c = x_patch.shape # x_patch: B 196 768
+        x_cls, x_patch, attn_weights = self.forward_features(x) #x_cls: B 20 384 x_patch: B 196 384 weights_i: [(B 6 (20+196) (20+196))*12]
+        n, p, c = x_patch.shape # x_patch: B 196 384
         if w != h:
             w0 = w // self.patch_embed.patch_size[0]
             h0 = h // self.patch_embed.patch_size[0]
             x_patch = torch.reshape(x_patch, [n, w0, h0, c])
         else:
-            x_patch = torch.reshape(x_patch, [n, int(p ** 0.5), int(p ** 0.5), c]) # x_patch: B 14 14 768
-        x_patch = x_patch.permute([0, 3, 1, 2]) # x_patch: B 768 14 14
+            x_patch = torch.reshape(x_patch, [n, int(p ** 0.5), int(p ** 0.5), c]) # x_patch: B 14 14 384
+        x_patch = x_patch.permute([0, 3, 1, 2]) # x_patch: B 384 14 14
         x_patch = x_patch.contiguous()
         x_patch = self.head(x_patch) # x_patch: B 20 14 14
         x_patch_logits = self.avgpool(x_patch).squeeze(3).squeeze(2) # x_patch_logits: B 20
 
-        attn_weights = torch.stack(attn_weights)  # 12 * B * H * N * N   #12(num_of_layer used) B 12(num_of_heads) (20+196) (20+196)
+        attn_weights = torch.stack(attn_weights)  # 12 * B * H * N * N   #12(num_of_layer used) B 6(num_of_heads) (20+196) (20+196)
         attn_weights = torch.mean(attn_weights, dim=2)  # 12 * B * N * N   #12(num_of_layer used) B (20+196) (20+196)
 
         feature_map = x_patch.detach().clone()  # B * C * 14 * 14   feature_map: B 20 14 14
@@ -100,7 +100,7 @@ class MCTformerV2(VisionTransformer):
 
         patch_attn = attn_weights[:, :, self.num_classes:, self.num_classes:]  #12(num_of_layer used) B 196 196
 
-        x_cls_logits = x_cls.mean(-1) #x_cls_logits: B 20 768
+        x_cls_logits = x_cls.mean(-1) #x_cls_logits: B 20 384
 
         if return_att:
             return x_cls_logits, cams, patch_attn
